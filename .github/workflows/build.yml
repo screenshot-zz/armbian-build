@@ -101,42 +101,13 @@ jobs:
           echo "=== output/images 内容 ==="
           ls -lh output/images/ || true
 
-      - name: 分割镜像以适应 GitHub Release 2GB 限制
-        working-directory: armbian-build
-        run: |
-          cd output/images
-          # 找到 .img.xz 文件
-          IMG_XZ=$(ls *.img.xz 2>/dev/null | head -n 1)
-          if [ -z "$IMG_XZ" ]; then
-            echo "❌ 找不到 .img.xz 文件，退出"
-            ls -lh
-            exit 1
-          fi
-          echo "原始镜像: $IMG_XZ"
-          ls -lh "$IMG_XZ"
-
-          # 分割为 1800M 一块（安全小于 2GB）
-          split -b 1800M -d -a 2 "$IMG_XZ" "${IMG_XZ}.part-"
-          echo "=== 分割后 ==="
-          ls -lh "${IMG_XZ}.part-"*
-
-          # 生成所有分割块的校验文件
-          sha256sum ${IMG_XZ}.part-* > "${IMG_XZ}.parts.sha256"
-          cat "${IMG_XZ}.parts.sha256"
-
-          # 删除原始大文件
-          rm -f "$IMG_XZ"
-
-          echo "=== 最终上传列表 ==="
-          ls -lh
-
-      - name: 上传镜像产物（分割后）
+      - name: 上传镜像产物
         uses: actions/upload-artifact@v4
         with:
           name: armbian-orangepi5-${{ inputs.desktop }}
           path: |
-            armbian-build/output/images/*.img.xz.part-*
-            armbian-build/output/images/*.img.xz.parts.sha256
+            armbian-build/output/images/*.img.xz
+            armbian-build/output/images/*.img.xz.sha
             armbian-build/output/images/*.txt
           if-no-files-found: error
           retention-days: 14
@@ -150,19 +121,17 @@ jobs:
           body: |
             Armbian for Orange Pi 5, ${{ inputs.desktop }} desktop, WKS50HD005-WCT LCD 支持。
 
-            ## 下载与合并
+            ## 刷写
 
-            下载所有 `.img.xz.part-*` 文件到同一个目录，然后运行：
+            下载 `.img.xz`，用 balenaEtcher 直接打开写入 SD 卡，或：
 
             ```bash
-            cat Armbian-*.img.xz.part-* > Armbian.img.xz
-            sha256sum -c Armbian-*.img.xz.parts.sha256
+            xz -d Armbian-*.img.xz
+            sudo dd if=Armbian-*.img of=/dev/sdX bs=4M status=progress
             ```
-
-            校验通过后，用 balenaEtcher 或 dd 刷写 `Armbian.img.xz` 即可。
           files: |
-            armbian-build/output/images/*.img.xz.part-*
-            armbian-build/output/images/*.img.xz.parts.sha256
+            armbian-build/output/images/*.img.xz
+            armbian-build/output/images/*.img.xz.sha
             armbian-build/output/images/*.txt
           prerelease: true
         env:
