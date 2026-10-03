@@ -1,0 +1,80 @@
+name: Build Armbian Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      desktop:
+        description: '桌面环境'
+        required: true
+        type: choice
+        options:
+          - gnome
+          - xfce
+        default: gnome
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 定制仓库
+        uses: actions/checkout@v4
+        with:
+          path: custom
+
+      - name: 释放磁盘空间
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/share/swift
+          sudo docker image prune --all --force
+          df -h /
+
+      - name: 克隆 Armbian 构建框架
+        run: |
+          git clone --depth=1 https://github.com/armbian/build.git armbian-build
+
+      - name: 合并 userpatches
+        run: |
+          mkdir -p armbian-build/userpatches
+          cp -rv custom/userpatches/* armbian-build/userpatches/
+          echo "=== userpatches 内容 ==="
+          find armbian-build/userpatches -type f | sort
+
+      - name: 编译 Armbian 镜像
+        working-directory: armbian-build
+        env:
+          EXPERT: "yes"
+        run: |
+          ./compile.sh build \
+            BOARD=orangepi5 \
+            BRANCH=vendor \
+            BUILD_DESKTOP=yes \
+            BUILD_MINIMAL=no \
+            DESKTOP_ENVIRONMENT=${{ inputs.desktop }} \
+            DESKTOP_TIER=mid \
+            RELEASE=resolute
+
+      - name: 上传镜像产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: armbian-orangepi5-${{ inputs.desktop }}
+          path: armbian-build/output/images/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 创建 GitHub Release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Armbian orangepi5 ${{ inputs.desktop }} #${{ github.run_number }}
+          files: armbian-build/output/images/*
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
