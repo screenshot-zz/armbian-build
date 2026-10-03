@@ -58,6 +58,7 @@ jobs:
             BUILD_MINIMAL=no \
             DESKTOP_ENVIRONMENT=${{ inputs.desktop }} \
             DESKTOP_TIER=mid \
+            KERNEL_CONFIGURE=no \
             RELEASE=resolute
 
       - name: 上传镜像产物
