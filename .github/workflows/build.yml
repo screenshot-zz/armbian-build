@@ -24,7 +24,7 @@ jobs:
         with:
           path: custom
 
-      - name: 设置 QEMU（关键，解决 arm64 跨架构构建）
+      - name: 设置 QEMU（解决 arm64 跨架构构建）
         uses: docker/setup-qemu-action@v3
         with:
           platforms: all
@@ -47,9 +47,37 @@ jobs:
       - name: 合并 userpatches
         run: |
           mkdir -p armbian-build/userpatches
-          cp -rv custom/userpatches/* armbian-build/userpatches/
+          if [ -d custom/userpatches ]; then
+            cp -rv custom/userpatches/* armbian-build/userpatches/
+          fi
           echo "=== userpatches 内容 ==="
           find armbian-build/userpatches -type f | sort
+
+      - name: 修改内核配置（GT9XX 改 m，启用 GOODIX m）
+        run: |
+          CONFIG_FILE=armbian-build/config/kernel/linux-rk35xx-vendor.config
+          echo "=== 修改前 ==="
+          grep -E 'CONFIG_TOUCHSCREEN_(GT9XX|GOODIX)' "$CONFIG_FILE" || echo "(未找到相关项)"
+
+          if grep -q '^CONFIG_TOUCHSCREEN_GT9XX=y' "$CONFIG_FILE"; then
+            sed -i 's/^CONFIG_TOUCHSCREEN_GT9XX=y/CONFIG_TOUCHSCREEN_GT9XX=m/' "$CONFIG_FILE"
+            echo "✅ GT9XX 已改为 m"
+          elif grep -q '^CONFIG_TOUCHSCREEN_GT9XX=m' "$CONFIG_FILE"; then
+            echo "ℹ️ GT9XX 已经是 m，跳过"
+          else
+            echo "⚠️ 未找到 CONFIG_TOUCHSCREEN_GT9XX"
+          fi
+
+          if grep -q '^CONFIG_TOUCHSCREEN_GOODIX=' "$CONFIG_FILE"; then
+            sed -i 's/^CONFIG_TOUCHSCREEN_GOODIX=.*/CONFIG_TOUCHSCREEN_GOODIX=m/' "$CONFIG_FILE"
+            echo "✅ GOODIX 已改为 m"
+          else
+            echo 'CONFIG_TOUCHSCREEN_GOODIX=m' >> "$CONFIG_FILE"
+            echo "✅ GOODIX=m 已追加"
+          fi
+
+          echo "=== 修改后 ==="
+          grep -E 'CONFIG_TOUCHSCREEN_(GT9XX|GOODIX)' "$CONFIG_FILE"
 
       - name: 编译 Armbian 镜像
         working-directory: armbian-build
@@ -64,13 +92,52 @@ jobs:
             DESKTOP_ENVIRONMENT=${{ inputs.desktop }} \
             DESKTOP_TIER=mid \
             KERNEL_CONFIGURE=no \
-            RELEASE=resolute
+            RELEASE=resolute \
+            COMPRESS_OUTPUTIMAGE=sha,img,xz
 
-      - name: 上传镜像产物
+      - name: 展示编译产物
+        working-directory: armbian-build
+        run: |
+          echo "=== output/images 内容 ==="
+          ls -lh output/images/ || true
+
+      - name: 分割镜像以适应 GitHub Release 2GB 限制
+        working-directory: armbian-build
+        run: |
+          cd output/images
+          # 找到 .img.xz 文件
+          IMG_XZ=$(ls *.img.xz 2>/dev/null | head -n 1)
+          if [ -z "$IMG_XZ" ]; then
+            echo "❌ 找不到 .img.xz 文件，退出"
+            ls -lh
+            exit 1
+          fi
+          echo "原始镜像: $IMG_XZ"
+          ls -lh "$IMG_XZ"
+
+          # 分割为 1800M 一块（安全小于 2GB）
+          split -b 1800M -d -a 2 "$IMG_XZ" "${IMG_XZ}.part-"
+          echo "=== 分割后 ==="
+          ls -lh "${IMG_XZ}.part-"*
+
+          # 生成所有分割块的校验文件
+          sha256sum ${IMG_XZ}.part-* > "${IMG_XZ}.parts.sha256"
+          cat "${IMG_XZ}.parts.sha256"
+
+          # 删除原始大文件
+          rm -f "$IMG_XZ"
+
+          echo "=== 最终上传列表 ==="
+          ls -lh
+
+      - name: 上传镜像产物（分割后）
         uses: actions/upload-artifact@v4
         with:
           name: armbian-orangepi5-${{ inputs.desktop }}
-          path: armbian-build/output/images/*
+          path: |
+            armbian-build/output/images/*.img.xz.part-*
+            armbian-build/output/images/*.img.xz.parts.sha256
+            armbian-build/output/images/*.txt
           if-no-files-found: error
           retention-days: 14
 
@@ -80,7 +147,23 @@ jobs:
         with:
           tag_name: build-${{ github.run_number }}
           name: Armbian orangepi5 ${{ inputs.desktop }} #${{ github.run_number }}
-          files: armbian-build/output/images/*
+          body: |
+            Armbian for Orange Pi 5, ${{ inputs.desktop }} desktop, WKS50HD005-WCT LCD 支持。
+
+            ## 下载与合并
+
+            下载所有 `.img.xz.part-*` 文件到同一个目录，然后运行：
+
+            ```bash
+            cat Armbian-*.img.xz.part-* > Armbian.img.xz
+            sha256sum -c Armbian-*.img.xz.parts.sha256
+            ```
+
+            校验通过后，用 balenaEtcher 或 dd 刷写 `Armbian.img.xz` 即可。
+          files: |
+            armbian-build/output/images/*.img.xz.part-*
+            armbian-build/output/images/*.img.xz.parts.sha256
+            armbian-build/output/images/*.txt
           prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
