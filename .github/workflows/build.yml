@@ -24,6 +24,11 @@ jobs:
         with:
           path: custom
 
+      - name: 设置 QEMU（关键，解决 arm64 跨架构构建）
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
+
       - name: 释放磁盘空间
         run: |
           sudo rm -rf /usr/share/dotnet
